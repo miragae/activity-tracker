@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Activity Dashboard</title>
+<style>
+  :root {
+    --bg-light: #f5f5f5;
+    --bg-dark: #1e1e1e;
+    --text-light: #000;
+    --text-dark: #fff;
+    --bar-color: #4caf50;
+    --inactive-color: #ccc;
+    --grid-color-light: #ddd;
+    --grid-color-dark: #333;
+  }
+  body.light {
+    background-color: var(--bg-light);
+    color: var(--text-light);
+  }
+  body.dark {
+    background-color: var(--bg-dark);
+    color: var(--text-dark);
+  }
+  body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 1rem;
+    transition: background 0.3s, color 0.3s;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+  h1 { margin: 0; }
+  button {
+    background: none;
+    border: 1px solid currentColor;
+    padding: 0.4rem 0.8rem;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .day-row {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 2rem;
+  }
+  .day-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 0.3rem;
+  }
+  .date-label {
+    width: 100px;
+    text-align: right;
+    margin-right: 1rem;
+    flex-shrink: 0;
+  }
+  .timeline-container {
+    display: flex;
+    align-items: center;
+  }
+  .timeline {
+    position: relative;
+    background: var(--inactive-color);
+    height: 20px;
+    flex-grow: 1;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .hour-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    margin-top: 0.3rem;
+    color: gray;
+  }
+  .hour-grid {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background-color: var(--grid-color-light);
+  }
+  body.dark .hour-grid {
+    background-color: var(--grid-color-dark);
+  }
+  .activity-bar {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    background-color: var(--bar-color);
+  }
+  .summary {
+    width: 120px;
+    text-align: left;
+    margin-left: 1rem;
+    flex-shrink: 0;
+  }
+  .tooltip {
+    position: absolute;
+    background: rgba(0,0,0,0.8);
+    color: white;
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    display: none;
+    pointer-events: none;
+  }
+  .pagination {
+    display: flex;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+  .time-label {
+    font-size: 12px;
+    color: gray;
+    position: absolute;
+    top: -18px;
+  }
+</style>
+</head>
+<body class="light">
+  <header>
+    <h1>Activity Dashboard</h1>
+    <button id="theme-toggle">Toggle Theme</button>
+  </header>
+  <div id="dashboard"></div>
+  <div class="pagination">
+    <button id="prev-week">Prev</button>
+    <button id="next-week">Next</button>
+  </div>
+  <div class="tooltip" id="tooltip"></div>
+
+  <script>
+    const dummyData = [
+      {
+        date: '2025-10-07',
+        total: '7h 42m',
+        activities: [
+          { start: 9*60, end: 11*60, window: 'VS Code' },
+          { start: 11.5*60, end: 13*60, window: 'Chrome' },
+          { start: 14*60, end: 18*60, window: 'Slack' }
+        ]
+      },
+      {
+        date: '2025-10-08',
+        total: '6h 10m',
+        activities: [
+          { start: 8*60, end: 10*60, window: 'Outlook' },
+          { start: 10.5*60, end: 12.5*60, window: 'Excel' },
+          { start: 15*60, end: 17*60, window: 'Teams' }
+        ]
+      }
+    ];
+
+    const dashboard = document.getElementById('dashboard');
+    const tooltip = document.getElementById('tooltip');
+
+    function renderDashboard(data) {
+      dashboard.innerHTML = '';
+      const startHour = 3;
+      const endHour = 27;
+      const totalMinutes = (endHour - startHour) * 60;
+
+      data.forEach(day => {
+        const row = document.createElement('div');
+        row.className = 'day-row';
+
+        const headerRow = document.createElement('div');
+        headerRow.className = 'day-header';
+        const dateLabel = document.createElement('div');
+        dateLabel.className = 'date-label';
+        dateLabel.textContent = day.date;
+        const summary = document.createElement('div');
+        summary.className = 'summary';
+        summary.textContent = day.total;
+        headerRow.append(dateLabel, summary);
+
+        const timelineContainer = document.createElement('div');
+        timelineContainer.className = 'timeline-container';
+
+        const timeline = document.createElement('div');
+        timeline.className = 'timeline';
+
+        for (let h = startHour; h <= endHour; h++) {
+          const grid = document.createElement('div');
+          grid.className = 'hour-grid';
+          grid.style.left = ((h - startHour) / (endHour - startHour)) * 100 + '%';
+          timeline.appendChild(grid);
+        }
+
+        let firstBarLeft = null;
+        let lastBarRight = null;
+
+        day.activities.forEach(a => {
+          const adjustedStart = a.start - startHour * 60;
+          const adjustedEnd = a.end - startHour * 60;
+          const bar = document.createElement('div');
+          bar.className = 'activity-bar';
+          const left = (adjustedStart / totalMinutes) * 100;
+          const width = ((adjustedEnd - adjustedStart) / totalMinutes) * 100;
+          bar.style.left = left + '%';
+          bar.style.width = width + '%';
+
+          if (firstBarLeft === null || left < firstBarLeft) firstBarLeft = left;
+          if (lastBarRight === null || left + width > lastBarRight) lastBarRight = left + width;
+
+          bar.addEventListener('mousemove', e => {
+            tooltip.style.display = 'block';
+            tooltip.style.left = e.pageX + 10 + 'px';
+            tooltip.style.top = e.pageY + 10 + 'px';
+            tooltip.innerHTML = `${a.window}<br>${formatMinutes(a.start)} - ${formatMinutes(a.end)}`;
+          });
+          bar.addEventListener('mouseleave', () => {
+            tooltip.style.display = 'none';
+          });
+          timeline.appendChild(bar);
+        });
+
+        // Add start/end labels for work period
+        if (firstBarLeft !== null && lastBarRight !== null) {
+          const startLabel = document.createElement('div');
+          startLabel.className = 'time-label';
+          startLabel.style.left = firstBarLeft + '%';
+          startLabel.textContent = formatMinutes(day.activities[0].start);
+
+          const endLabel = document.createElement('div');
+          endLabel.className = 'time-label';
+          endLabel.style.left = lastBarRight + '%';
+          endLabel.textContent = formatMinutes(day.activities[day.activities.length - 1].end);
+
+          timeline.appendChild(startLabel);
+          timeline.appendChild(endLabel);
+        }
+
+        const labels = document.createElement('div');
+        labels.className = 'hour-labels';
+        for (let h = startHour; h <= endHour; h += 3) {
+          const label = document.createElement('div');
+          const displayHour = h % 24;
+          label.textContent = displayHour.toString().padStart(2, '0') + ':00';
+          labels.appendChild(label);
+        }
+
+        timelineContainer.appendChild(timeline);
+        row.append(headerRow, timelineContainer, labels);
+        dashboard.appendChild(row);
+      });
+    }
+
+    function formatMinutes(min) {
+      const h = Math.floor(min / 60);
+      const m = Math.floor(min % 60);
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+    }
+
+    document.getElementById('theme-toggle').addEventListener('click', () => {
+      document.body.classList.toggle('dark');
+      document.body.classList.toggle('light');
+    });
+
+    renderDashboard(dummyData);
+  </script>
+</body>
+</html>
