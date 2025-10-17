@@ -45,30 +45,33 @@
         }
         .day-row {
             display: flex;
-            flex-direction: column;
+            align-items: center;
             margin-bottom: 2rem;
         }
-        .day-header {
-            display: flex;
-            align-items: center;
-            margin-bottom: 0.3rem;
-        }
-        .date-label {
-            width: 100px;
+        .day-label {
+            width: 120px;
             text-align: right;
+            font-weight: bold;
             margin-right: 1rem;
-            flex-shrink: 0;
+            padding-right: 1rem;
+            border-right: 2px solid var(--inactive-color);
+            font-size: 14px;
+        }
+        .timeline-section {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
         }
         .timeline-container {
+            position: relative;
             display: flex;
             align-items: center;
-            position: relative;
         }
         .timeline {
             position: relative;
             background: var(--inactive-color);
             height: 20px;
-            flex-grow: 1;
+            width: 100%;
             border-radius: 4px;
             overflow: visible;
         }
@@ -96,7 +99,7 @@
             background-color: var(--bar-color);
         }
         .summary {
-            width: 120px;
+            width: 100px;
             text-align: left;
             margin-left: 1rem;
             flex-shrink: 0;
@@ -175,15 +178,12 @@
             const row = document.createElement('div');
             row.className = 'day-row';
 
-            const headerRow = document.createElement('div');
-            headerRow.className = 'day-header';
-            const dateLabel = document.createElement('div');
-            dateLabel.className = 'date-label';
-            dateLabel.textContent = day.date;
-            const summary = document.createElement('div');
-            summary.className = 'summary';
-            summary.textContent = day.total;
-            headerRow.append(dateLabel, summary);
+            const dayLabel = document.createElement('div');
+            dayLabel.className = 'day-label';
+            dayLabel.textContent = day.date + "\n" + day.total;
+
+            const section = document.createElement('div');
+            section.className = 'timeline-section';
 
             const timelineContainer = document.createElement('div');
             timelineContainer.className = 'timeline-container';
@@ -226,7 +226,6 @@
                 timeline.appendChild(bar);
             });
 
-            // Add start/end labels for work period
             if (firstBarLeft !== null && lastBarRight !== null) {
                 const startLabel = document.createElement('div');
                 startLabel.className = 'time-label';
@@ -252,7 +251,10 @@
             }
 
             timelineContainer.appendChild(timeline);
-            row.append(headerRow, timelineContainer, labels);
+            section.appendChild(timelineContainer);
+            section.appendChild(labels);
+
+            row.append(dayLabel, section);
             dashboard.appendChild(row);
         });
     }
