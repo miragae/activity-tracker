@@ -43,6 +43,10 @@
             border-radius: 6px;
             cursor: pointer;
         }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
         .day-row {
             display: flex;
             align-items: center;
@@ -131,12 +135,36 @@
             font-size: 12px;
             display: none;
             pointer-events: none;
+            max-width: 300px;
+            z-index: 1000;
         }
         .pagination {
             display: flex;
             justify-content: center;
+            align-items: center;
             gap: 1rem;
             margin-top: 2rem;
+        }
+        .week-label {
+            font-weight: bold;
+            min-width: 200px;
+            text-align: center;
+        }
+        .loading {
+            text-align: center;
+            padding: 2rem;
+            color: gray;
+        }
+        .error {
+            text-align: center;
+            padding: 2rem;
+            color: #f44336;
+        }
+        .no-data {
+            text-align: center;
+            padding: 2rem;
+            color: gray;
+            font-style: italic;
         }
     </style>
 </head>
@@ -147,38 +175,205 @@
 </header>
 <div id="dashboard"></div>
 <div class="pagination">
-    <button id="prev-week">Prev</button>
-    <button id="next-week">Next</button>
+    <button id="prev-week">← Previous Week</button>
+    <div class="week-label" id="week-label">Loading...</div>
+    <button id="next-week">Next Week →</button>
 </div>
 <div class="tooltip" id="tooltip"></div>
 
 <script>
-    const dummyData = [
-        {
-            date: '2025-10-07',
-            total: '7h 42m',
-            activities: [
-                { start: 9*60, end: 11*60, window: 'VS Code' },
-                { start: 11.5*60, end: 13*60, window: 'Chrome' },
-                { start: 14*60, end: 18*60, window: 'Slack' }
-            ]
-        },
-        {
-            date: '2025-10-08',
-            total: '6h 10m',
-            activities: [
-                { start: 8*60, end: 10*60, window: 'Outlook' },
-                { start: 10.5*60, end: 12.5*60, window: 'Excel' },
-                { start: 15*60, end: 17*60, window: 'Teams' }
-            ]
-        }
-    ];
-
     const dashboard = document.getElementById('dashboard');
     const tooltip = document.getElementById('tooltip');
+    const weekLabel = document.getElementById('week-label');
+    const prevWeekBtn = document.getElementById('prev-week');
+    const nextWeekBtn = document.getElementById('next-week');
 
+    let currentWeekMonday = null;
+    let isLoading = false;
+
+    // Utility: Get Monday of a given date
+    function getMondayOfWeek(date) {
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust for Sunday
+        return new Date(d.setDate(diff));
+    }
+
+    // Utility: Format date as YYYY-MM-DD
+    function formatDate(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+
+    // Utility: Get month folder from date (YYYY-MM)
+    function getMonthFolder(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        return `${year}-${month}`;
+    }
+
+    // Utility: Convert HH:MM to minutes from midnight
+    function timeToMinutes(timeStr) {
+        const [hours, minutes] = timeStr.split(':').map(Number);
+        return hours * 60 + minutes;
+    }
+
+    // Utility: Format minutes to HH:MM
+    function formatMinutes(min) {
+        const h = Math.floor(min / 60);
+        const m = Math.floor(min % 60);
+        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+    }
+
+    // Utility: Format total time (minutes to "Xh Ym")
+    function formatTotalTime(totalMinutes) {
+        const hours = Math.floor(totalMinutes / 60);
+        const minutes = totalMinutes % 60;
+        if (hours > 0 && minutes > 0) {
+            return `${hours}h ${minutes}m`;
+        } else if (hours > 0) {
+            return `${hours}h`;
+        } else {
+            return `${minutes}m`;
+        }
+    }
+
+    // Check if a date is in the current week
+    function isCurrentWeek(monday) {
+        const today = new Date();
+        const todayMonday = getMondayOfWeek(today);
+        return formatDate(monday) === formatDate(todayMonday);
+    }
+
+    // Load activity data for a specific week
+    async function loadWeekData(monday) {
+        if (isLoading) return;
+        isLoading = true;
+        
+        dashboard.innerHTML = '<div class="loading">Loading...</div>';
+        prevWeekBtn.disabled = true;
+        nextWeekBtn.disabled = true;
+
+        const mondayStr = formatDate(monday);
+        const monthFolder = getMonthFolder(monday);
+        const weekFilePath = `logs/${monthFolder}/${mondayStr}.js`;
+
+        let weekData = {};
+        let currentDayData = {};
+
+        try {
+            // Load weekly file
+            const weekResponse = await fetch(weekFilePath);
+            if (weekResponse.ok) {
+                weekData = await weekResponse.json();
+            } else if (weekResponse.status !== 404) {
+                throw new Error(`Failed to load week data: ${weekResponse.status}`);
+            }
+
+            // If current week, also load current_day.js
+            if (isCurrentWeek(monday)) {
+                try {
+                    const currentDayResponse = await fetch('logs/current_day.js');
+                    if (currentDayResponse.ok) {
+                        currentDayData = await currentDayResponse.json();
+                    }
+                } catch (err) {
+                    console.warn('Could not load current_day.js:', err);
+                }
+            }
+
+            // Merge data
+            const mergedData = { ...weekData, ...currentDayData };
+
+            // Check if we have any data
+            if (Object.keys(mergedData).length === 0) {
+                dashboard.innerHTML = '<div class="no-data">No activity data for this week</div>';
+                updateWeekLabel(monday);
+                isLoading = false;
+                prevWeekBtn.disabled = false;
+                nextWeekBtn.disabled = false;
+                return;
+            }
+
+            // Convert to display format
+            const displayData = convertToDisplayFormat(mergedData);
+            
+            renderDashboard(displayData);
+            updateWeekLabel(monday);
+
+        } catch (error) {
+            console.error('Error loading data:', error);
+            dashboard.innerHTML = `<div class="error">Error loading data: ${error.message}</div>`;
+        } finally {
+            isLoading = false;
+            prevWeekBtn.disabled = false;
+            nextWeekBtn.disabled = false;
+        }
+    }
+
+    // Convert merged data to display format
+    function convertToDisplayFormat(data) {
+        const result = [];
+
+        // Sort dates
+        const sortedDates = Object.keys(data).sort();
+
+        for (const date of sortedDates) {
+            const periods = data[date];
+            if (!periods || periods.length === 0) continue;
+
+            // Calculate total minutes for the day
+            let totalMinutes = 0;
+            const activities = [];
+
+            for (const period of periods) {
+                const startMin = timeToMinutes(period.start);
+                const endMin = timeToMinutes(period.end);
+                const duration = endMin - startMin + 1; // +1 because end is inclusive
+
+                // Sum focus minutes
+                const focusTotal = Object.values(period.focus).reduce((sum, val) => sum + val, 0);
+                totalMinutes += focusTotal;
+
+                activities.push({
+                    start: startMin,
+                    end: endMin,
+                    focus: period.focus
+                });
+            }
+
+            result.push({
+                date: date,
+                total: formatTotalTime(totalMinutes),
+                activities: activities
+            });
+        }
+
+        return result;
+    }
+
+    // Update week label
+    function updateWeekLabel(monday) {
+        const sunday = new Date(monday);
+        sunday.setDate(sunday.getDate() + 6);
+
+        const mondayStr = monday.toLocaleDateString('pl-PL', { day: '2-digit', month: 'short' });
+        const sundayStr = sunday.toLocaleDateString('pl-PL', { day: '2-digit', month: 'short', year: 'numeric' });
+
+        weekLabel.textContent = `${mondayStr} - ${sundayStr}`;
+    }
+
+    // Render dashboard
     function renderDashboard(data) {
         dashboard.innerHTML = '';
+        
+        if (data.length === 0) {
+            dashboard.innerHTML = '<div class="no-data">No activity data for this week</div>';
+            return;
+        }
+
         const startHour = 3;
         const endHour = 27;
         const totalMinutes = (endHour - startHour) * 60;
@@ -190,7 +385,7 @@
             const dayLabel = document.createElement('div');
             dayLabel.className = 'day-label';
 
-            const dateObj = new Date(day.date);
+            const dateObj = new Date(day.date + 'T00:00:00');
             const dayName = dateObj.toLocaleDateString('pl-PL', { weekday: 'long' });
             const dayDate = dateObj.toLocaleDateString('pl-PL', { day: '2-digit', month: 'long' });
 
@@ -205,6 +400,7 @@
             const timeline = document.createElement('div');
             timeline.className = 'timeline';
 
+            // Add hour grid lines
             for (let h = startHour; h <= endHour; h++) {
                 const grid = document.createElement('div');
                 grid.className = 'hour-grid';
@@ -215,24 +411,32 @@
             let firstBarLeft = null;
             let lastBarRight = null;
 
-            day.activities.forEach(a => {
-                const adjustedStart = a.start - startHour * 60;
-                const adjustedEnd = a.end - startHour * 60;
+            // Add activity bars
+            day.activities.forEach(activity => {
+                const adjustedStart = activity.start - startHour * 60;
+                const adjustedEnd = activity.end - startHour * 60;
                 const bar = document.createElement('div');
                 bar.className = 'activity-bar';
                 const left = (adjustedStart / totalMinutes) * 100;
-                const width = ((adjustedEnd - adjustedStart) / totalMinutes) * 100;
+                const width = ((adjustedEnd - adjustedStart + 1) / totalMinutes) * 100;
                 bar.style.left = left + '%';
                 bar.style.width = width + '%';
 
                 if (firstBarLeft === null || left < firstBarLeft) firstBarLeft = left;
                 if (lastBarRight === null || left + width > lastBarRight) lastBarRight = left + width;
 
+                // Tooltip with focus breakdown
                 bar.addEventListener('mousemove', e => {
                     tooltip.style.display = 'block';
                     tooltip.style.left = e.pageX + 10 + 'px';
                     tooltip.style.top = e.pageY + 10 + 'px';
-                    tooltip.innerHTML = `${a.window}<br>${formatMinutes(a.start)} - ${formatMinutes(a.end)}`;
+                    
+                    let focusHtml = '';
+                    for (const [app, minutes] of Object.entries(activity.focus)) {
+                        focusHtml += `${app}: ${minutes}m<br>`;
+                    }
+                    
+                    tooltip.innerHTML = `<strong>${formatMinutes(activity.start)} - ${formatMinutes(activity.end)}</strong><br>${focusHtml}`;
                 });
                 bar.addEventListener('mouseleave', () => {
                     tooltip.style.display = 'none';
@@ -240,6 +444,7 @@
                 timeline.appendChild(bar);
             });
 
+            // Add time labels (start and end of day's activities)
             if (firstBarLeft !== null && lastBarRight !== null) {
                 const startLabel = document.createElement('div');
                 startLabel.className = 'time-label';
@@ -252,9 +457,13 @@
                 endLabel.textContent = formatMinutes(day.activities[day.activities.length - 1].end);
 
                 timelineContainer.appendChild(startLabel);
-                timelineContainer.appendChild(endLabel);
+                if ((day.activities[day.activities.length - 1].end - day.activities[0].start) >= 60)
+                {
+                    timelineContainer.appendChild(endLabel);
+                }
             }
 
+            // Add hour labels
             const labels = document.createElement('div');
             labels.className = 'hour-labels';
             for (let h = startHour; h <= endHour; h += 3) {
@@ -273,18 +482,38 @@
         });
     }
 
-    function formatMinutes(min) {
-        const h = Math.floor(min / 60);
-        const m = Math.floor(min % 60);
-        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
-    }
+    // Navigation: Previous week
+    prevWeekBtn.addEventListener('click', () => {
+        if (!currentWeekMonday) return;
+        const prevMonday = new Date(currentWeekMonday);
+        prevMonday.setDate(prevMonday.getDate() - 7);
+        currentWeekMonday = prevMonday;
+        loadWeekData(currentWeekMonday);
+    });
 
+    // Navigation: Next week
+    nextWeekBtn.addEventListener('click', () => {
+        if (!currentWeekMonday) return;
+        const nextMonday = new Date(currentWeekMonday);
+        nextMonday.setDate(nextMonday.getDate() + 7);
+        
+        // Don't go beyond current week
+        const todayMonday = getMondayOfWeek(new Date());
+        if (nextMonday <= todayMonday) {
+            currentWeekMonday = nextMonday;
+            loadWeekData(currentWeekMonday);
+        }
+    });
+
+    // Theme toggle
     document.getElementById('theme-toggle').addEventListener('click', () => {
         document.body.classList.toggle('dark');
         document.body.classList.toggle('light');
     });
 
-    renderDashboard(dummyData);
+    // Initial load: current week
+    currentWeekMonday = getMondayOfWeek(new Date());
+    loadWeekData(currentWeekMonday);
 </script>
 </body>
 </html>
