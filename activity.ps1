@@ -8,9 +8,14 @@
 
 #Requires -Version 5.1
 
+param(
+    [switch]$NoServer  # Skip starting the dashboard server
+)
+
 # Configuration
 $SAMPLE_INTERVAL = 60        # seconds between samples
 $IDLE_THRESHOLD = 600        # seconds (10 minutes) to consider gaps as continuous activity
+$DASHBOARD_PORT = 8080       # HTTP server port
 $BASE_PATH = $PSScriptRoot
 $LOGS_PATH = Join-Path $BASE_PATH "logs"
 
@@ -158,6 +163,36 @@ function Test-NewDay {
     return $now.Date -gt $LastCheck.Date
 }
 
+# Start dashboard server in background
+function Start-DashboardServer {
+    $serverScript = Join-Path $BASE_PATH "dashboardServer.ps1"
+    
+    if (-not (Test-Path $serverScript)) {
+        Write-Host "Warning: dashboardServer.ps1 not found. Skipping server start." -ForegroundColor Yellow
+        return $null
+    }
+    
+    try {
+        # Start server in a new PowerShell process
+        $serverProcess = Start-Process -FilePath "powershell.exe" `
+            -ArgumentList "-ExecutionPolicy Bypass -File `"$serverScript`" -Port $DASHBOARD_PORT" `
+            -WindowStyle Normal `
+            -PassThru
+        
+        Start-Sleep -Seconds 2  # Give server time to start
+        
+        Write-Host "Dashboard server started (PID: $($serverProcess.Id))" -ForegroundColor Green
+        Write-Host "Access dashboard at: http://localhost:$DASHBOARD_PORT/dashboard.html" -ForegroundColor Cyan
+        Write-Host ""
+        
+        return $serverProcess
+        
+    } catch {
+        Write-Host "Warning: Could not start dashboard server: $_" -ForegroundColor Yellow
+        return $null
+    }
+}
+
 # Main execution
 function Start-ActivityMonitor {
     Write-Host "Activity Monitor Starting..." -ForegroundColor Green
@@ -174,64 +209,78 @@ function Start-ActivityMonitor {
         & "$BASE_PATH\updateCurrent.ps1"
     }
     
+    # Start dashboard server unless disabled
+    $serverProcess = $null
+    if (-not $NoServer) {
+        $serverProcess = Start-DashboardServer
+    }
+    
     $lastCheckDate = Get-Date
     $sampleCount = 0
     
     Write-Host "Monitoring started. Press Ctrl+C to stop." -ForegroundColor Cyan
     Write-Host ""
     
-    while ($true) {
-        try {
-            # Calculate next sample time (synchronized to minute boundary)
-            $now = Get-Date
-            $nextSample = $now.AddMinutes(1)
-            $nextSample = Get-Date -Year $nextSample.Year -Month $nextSample.Month `
-                                   -Day $nextSample.Day -Hour $nextSample.Hour `
-                                   -Minute $nextSample.Minute -Second 0 -Millisecond 0
-            
-            # Perform sampling
-            $idleSeconds = Get-IdleTime
-            $isIdle = $idleSeconds -gt $SAMPLE_INTERVAL
-            
-            # Always get window information (even when idle)
-            $window = Get-ActiveWindow
-            
-            # Determine status
-            $status = if ($isIdle) { "idle" } else { "active" }
-            
-            # Log activity
-            Write-ActivityLog -Status $status -Window $window
-            
-            $sampleCount++
-            $timestamp = Get-Date -Format "HH:mm:ss"
-            Write-Host "[$timestamp] Sample #$sampleCount - Status: $status - Window: $($window.ProcessDescription)" -ForegroundColor $(if ($isIdle) { "Yellow" } else { "Green" })
-            
-            # Update current day data
-            & "$BASE_PATH\updateCurrent.ps1"
-            
-            # Check if new day started
-            if (Test-NewDay -LastCheck $lastCheckDate) {
-                Write-Host ""
-                Write-Host "New day detected. Processing previous day..." -ForegroundColor Cyan
+    try {
+        while ($true) {
+            try {
+                # Calculate next sample time (synchronized to minute boundary)
+                $now = Get-Date
+                $nextSample = $now.AddMinutes(1)
+                $nextSample = Get-Date -Year $nextSample.Year -Month $nextSample.Month `
+                                       -Day $nextSample.Day -Hour $nextSample.Hour `
+                                       -Minute $nextSample.Minute -Second 0 -Millisecond 0
                 
-                $yesterday = $lastCheckDate.Date
-                & "$BASE_PATH\updateWeekly.ps1" -Date $yesterday
+                # Perform sampling
+                $idleSeconds = Get-IdleTime
+                $isIdle = $idleSeconds -gt $SAMPLE_INTERVAL
                 
-                $lastCheckDate = Get-Date
-                Write-Host "Day transition complete." -ForegroundColor Green
-                Write-Host ""
+                # Always get window information (even when idle)
+                $window = Get-ActiveWindow
+                
+                # Determine status
+                $status = if ($isIdle) { "idle" } else { "active" }
+                
+                # Log activity
+                Write-ActivityLog -Status $status -Window $window
+                
+                $sampleCount++
+                $timestamp = Get-Date -Format "HH:mm:ss"
+                Write-Host "[$timestamp] Sample #$sampleCount - Status: $status - Window: $($window.ProcessDescription)" -ForegroundColor $(if ($isIdle) { "Yellow" } else { "Green" })
+                
+                # Update current day data
+                & "$BASE_PATH\updateCurrent.ps1"
+                
+                # Check if new day started
+                if (Test-NewDay -LastCheck $lastCheckDate) {
+                    Write-Host ""
+                    Write-Host "New day detected. Processing previous day..." -ForegroundColor Cyan
+                    
+                    $yesterday = $lastCheckDate.Date
+                    & "$BASE_PATH\updateWeekly.ps1" -Date $yesterday
+                    
+                    $lastCheckDate = Get-Date
+                    Write-Host "Day transition complete." -ForegroundColor Green
+                    Write-Host ""
+                }
+                
+                # Sleep until next minute boundary
+                $sleepMs = [math]::Max(0, ($nextSample - (Get-Date)).TotalMilliseconds)
+                if ($sleepMs -gt 0) {
+                    Start-Sleep -Milliseconds $sleepMs
+                }
+                
+            } catch {
+                Write-Host "Error: $_" -ForegroundColor Red
+                Write-Host "Stack Trace: $($_.ScriptStackTrace)" -ForegroundColor Red
+                Start-Sleep -Seconds $SAMPLE_INTERVAL
             }
-            
-            # Sleep until next minute boundary
-            $sleepMs = [math]::Max(0, ($nextSample - (Get-Date)).TotalMilliseconds)
-            if ($sleepMs -gt 0) {
-                Start-Sleep -Milliseconds $sleepMs
-            }
-            
-        } catch {
-            Write-Host "Error: $_" -ForegroundColor Red
-            Write-Host "Stack Trace: $($_.ScriptStackTrace)" -ForegroundColor Red
-            Start-Sleep -Seconds $SAMPLE_INTERVAL
+        }
+    } finally {
+        # Cleanup: Stop server process if running
+        if ($serverProcess -and -not $serverProcess.HasExited) {
+            Write-Host "`nStopping dashboard server..." -ForegroundColor Yellow
+            Stop-Process -Id $serverProcess.Id -Force -ErrorAction SilentlyContinue
         }
     }
 }
