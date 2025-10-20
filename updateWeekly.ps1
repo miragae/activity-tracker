@@ -47,6 +47,7 @@ function Get-ActivityPeriods {
     $periods = @()
     $currentPeriod = $null
     $lastActiveTime = $null
+    $idleMinutesInPeriod = 0
     
     foreach ($record in $records) {
         $timestamp = [DateTime]::Parse($record.timestamp)
@@ -57,16 +58,33 @@ function Get-ActivityPeriods {
             if ($lastActiveTime) {
                 $gapSeconds = ($timestamp - $lastActiveTime).TotalSeconds
                 if ($gapSeconds -gt $IdleThresholdSeconds) {
+                    # Close period
                     if ($currentPeriod) {
                         $periods += $currentPeriod
                         $currentPeriod = $null
+                        $idleMinutesInPeriod = 0
+                    }
+                } else {
+                    # Idle within threshold - extend period
+                    if ($currentPeriod) {
+                        $currentPeriod.EndTime = $timestamp
+                        $idleMinutesInPeriod++
+                        
+                        # Track idle
+                        if ($currentPeriod.Focus.ContainsKey("idle")) {
+                            $currentPeriod.Focus["idle"] += 1
+                        } else {
+                            $currentPeriod.Focus["idle"] = 1
+                        }
                     }
                 }
             }
             continue
         }
         
+        # Active record
         $lastActiveTime = $timestamp
+        $idleMinutesInPeriod = 0
         
         if ($null -eq $currentPeriod) {
             $currentPeriod = @{

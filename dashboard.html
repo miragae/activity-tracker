@@ -137,6 +137,11 @@
             pointer-events: none;
             max-width: 300px;
             z-index: 1000;
+            line-height: 1.4;
+        }
+        .tooltip .idle-info {
+            color: #ffeb3b;
+            font-style: italic;
         }
         .pagination {
             display: flex;
@@ -324,18 +329,22 @@
             const periods = data[date];
             if (!periods || periods.length === 0) continue;
 
-            // Calculate total minutes for the day
+            // Calculate total minutes for the day (excluding idle)
             let totalMinutes = 0;
             const activities = [];
 
             for (const period of periods) {
                 const startMin = timeToMinutes(period.start);
                 const endMin = timeToMinutes(period.end);
-                const duration = endMin - startMin + 1; // +1 because end is inclusive
 
-                // Sum focus minutes
-                const focusTotal = Object.values(period.focus).reduce((sum, val) => sum + val, 0);
-                totalMinutes += focusTotal;
+                // Sum focus minutes (excluding idle for total calculation)
+                let activeMinutes = 0;
+                for (const [app, minutes] of Object.entries(period.focus)) {
+                    if (app !== 'idle') {
+                        activeMinutes += minutes;
+                    }
+                }
+                totalMinutes += activeMinutes;
 
                 activities.push({
                     start: startMin,
@@ -431,12 +440,24 @@
                     tooltip.style.left = e.pageX + 10 + 'px';
                     tooltip.style.top = e.pageY + 10 + 'px';
                     
-                    let focusHtml = '';
-                    for (const [app, minutes] of Object.entries(activity.focus)) {
-                        focusHtml += `${app}: ${minutes}m<br>`;
+                    let focusHtml = '<strong>' + formatMinutes(activity.start) + ' - ' + formatMinutes(activity.end) + '</strong><br>';
+                    
+                    // Sort apps, show idle last
+                    const apps = Object.entries(activity.focus).sort((a, b) => {
+                        if (a[0] === 'idle') return 1;
+                        if (b[0] === 'idle') return -1;
+                        return b[1] - a[1]; // Sort by minutes descending
+                    });
+                    
+                    for (const [app, minutes] of apps) {
+                        if (app === 'idle') {
+                            focusHtml += `<span class="idle-info">${app}: ${minutes}m</span><br>`;
+                        } else {
+                            focusHtml += `${app}: ${minutes}m<br>`;
+                        }
                     }
                     
-                    tooltip.innerHTML = `<strong>${formatMinutes(activity.start)} - ${formatMinutes(activity.end)}</strong><br>${focusHtml}`;
+                    tooltip.innerHTML = focusHtml;
                 });
                 bar.addEventListener('mouseleave', () => {
                     tooltip.style.display = 'none';
