@@ -53,7 +53,7 @@
             margin-bottom: 2rem;
         }
         .day-label {
-            width: 140px;
+            width: 160px;
             text-align: right;
             font-weight: bold;
             margin-right: 1rem;
@@ -69,11 +69,21 @@
             font-size: 12px;
             opacity: 0.8;
         }
-        .day-label .total-time {
+        .day-label .stats {
             display: block;
-            font-size: 13px;
-            margin-top: 0.3rem;
+            font-size: 11px;
+            margin-top: 0.5rem;
+            line-height: 1.4;
+        }
+        .day-label .stats .at-work-time {
+            color: #757575;
+            font-weight: bold;
+        }
+        .day-label .stats .active-time {
             color: var(--bar-color);
+        }
+        .day-label .stats .away-time {
+            color: #ff9800;
         }
         .timeline-section {
             flex-grow: 1;
@@ -130,7 +140,7 @@
             position: absolute;
             background: rgba(0,0,0,0.8);
             color: white;
-            padding: 5px 8px;
+            padding: 8px 12px;
             border-radius: 4px;
             font-size: 12px;
             display: none;
@@ -196,11 +206,19 @@
     let currentWeekMonday = null;
     let isLoading = false;
 
+    // Detect if running via HTTP server or file:// protocol
+    const isHttpServer = window.location.protocol.startsWith('http');
+    const baseUrl = isHttpServer ? '' : 'http://localhost:8080/';
+
+    if (!isHttpServer) {
+        console.warn('Dashboard opened via file:// protocol. Attempting to use HTTP server at localhost:8080');
+    }
+
     // Utility: Get Monday of a given date
     function getMondayOfWeek(date) {
         const d = new Date(date);
         const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust for Sunday
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
         return new Date(d.setDate(diff));
     }
 
@@ -240,8 +258,10 @@
             return `${hours}h ${minutes}m`;
         } else if (hours > 0) {
             return `${hours}h`;
-        } else {
+        } else if (minutes > 0) {
             return `${minutes}m`;
+        } else {
+            return '0m';
         }
     }
 
@@ -256,14 +276,14 @@
     async function loadWeekData(monday) {
         if (isLoading) return;
         isLoading = true;
-        
+
         dashboard.innerHTML = '<div class="loading">Loading...</div>';
         prevWeekBtn.disabled = true;
         nextWeekBtn.disabled = true;
 
         const mondayStr = formatDate(monday);
         const monthFolder = getMonthFolder(monday);
-        const weekFilePath = `logs/${monthFolder}/${mondayStr}.js`;
+        const weekFilePath = `${baseUrl}logs/${monthFolder}/${mondayStr}.js`;
 
         let weekData = {};
         let currentDayData = {};
@@ -280,7 +300,7 @@
             // If current week, also load current_day.js
             if (isCurrentWeek(monday)) {
                 try {
-                    const currentDayResponse = await fetch('logs/current_day.js');
+                    const currentDayResponse = await fetch(`${baseUrl}logs/current_day.js`);
                     if (currentDayResponse.ok) {
                         currentDayData = await currentDayResponse.json();
                     }
@@ -304,13 +324,17 @@
 
             // Convert to display format
             const displayData = convertToDisplayFormat(mergedData);
-            
+
             renderDashboard(displayData);
             updateWeekLabel(monday);
 
         } catch (error) {
             console.error('Error loading data:', error);
-            dashboard.innerHTML = `<div class="error">Error loading data: ${error.message}</div>`;
+            let errorMsg = `Error loading data: ${error.message}`;
+            if (!isHttpServer) {
+                errorMsg += '<br><br>Make sure the dashboard server is running (it starts automatically with activity.ps1)';
+            }
+            dashboard.innerHTML = `<div class="error">${errorMsg}</div>`;
         } finally {
             isLoading = false;
             prevWeekBtn.disabled = false;
@@ -329,22 +353,28 @@
             const periods = data[date];
             if (!periods || periods.length === 0) continue;
 
-            // Calculate total minutes for the day (excluding idle)
-            let totalMinutes = 0;
+            let firstStart = null;
+            let lastEnd = null;
+            let totalActiveMinutes = 0;  // Sum of all activity bar durations (including idle)
+
             const activities = [];
 
             for (const period of periods) {
                 const startMin = timeToMinutes(period.start);
                 const endMin = timeToMinutes(period.end);
 
-                // Sum focus minutes (excluding idle for total calculation)
-                let activeMinutes = 0;
-                for (const [app, minutes] of Object.entries(period.focus)) {
-                    if (app !== 'idle') {
-                        activeMinutes += minutes;
-                    }
+                // Track first and last times for "At work" calculation
+                if (firstStart === null || startMin < firstStart) {
+                    firstStart = startMin;
                 }
-                totalMinutes += activeMinutes;
+                if (lastEnd === null || endMin > lastEnd) {
+                    lastEnd = endMin;
+                }
+
+                // Sum ALL focus minutes (including idle) for "Active" calculation
+                for (const [app, minutes] of Object.entries(period.focus)) {
+                    totalActiveMinutes += minutes;
+                }
 
                 activities.push({
                     start: startMin,
@@ -353,9 +383,19 @@
                 });
             }
 
+            // Calculate times
+            const atWorkMinutes = (lastEnd !== null && firstStart !== null)
+                ? (lastEnd - firstStart)  // No +1
+                : 0;
+
+            const activeMinutes = totalActiveMinutes;  // Sum of all bars
+            const awayMinutes = atWorkMinutes - activeMinutes;  // Gaps between bars
+
             result.push({
                 date: date,
-                total: formatTotalTime(totalMinutes),
+                atWork: atWorkMinutes,
+                active: activeMinutes,
+                away: awayMinutes,
                 activities: activities
             });
         }
@@ -377,7 +417,7 @@
     // Render dashboard
     function renderDashboard(data) {
         dashboard.innerHTML = '';
-        
+
         if (data.length === 0) {
             dashboard.innerHTML = '<div class="no-data">No activity data for this week</div>';
             return;
@@ -398,7 +438,18 @@
             const dayName = dateObj.toLocaleDateString('pl-PL', { weekday: 'long' });
             const dayDate = dateObj.toLocaleDateString('pl-PL', { day: '2-digit', month: 'long' });
 
-            dayLabel.innerHTML = `<span class="day-name">${dayName}</span><span class="day-date">${dayDate}</span><span class="total-time">${day.total}</span>`;
+            // Build statistics display
+            let statsHtml = '<div class="stats">';
+            statsHtml += `<span class="at-work-time">At work: ${formatTotalTime(day.atWork)}</span><br>`;
+            statsHtml += `<span class="active-time">Active: ${formatTotalTime(day.active)}</span>`;
+
+            if (day.away > 0) {
+                statsHtml += `<br><span class="away-time">Away: ${formatTotalTime(day.away)}</span>`;
+            }
+
+            statsHtml += '</div>';
+
+            dayLabel.innerHTML = `<span class="day-name">${dayName}</span><span class="day-date">${dayDate}</span>${statsHtml}`;
 
             const section = document.createElement('div');
             section.className = 'timeline-section';
@@ -439,16 +490,16 @@
                     tooltip.style.display = 'block';
                     tooltip.style.left = e.pageX + 10 + 'px';
                     tooltip.style.top = e.pageY + 10 + 'px';
-                    
+
                     let focusHtml = '<strong>' + formatMinutes(activity.start) + ' - ' + formatMinutes(activity.end) + '</strong><br>';
-                    
+
                     // Sort apps, show idle last
                     const apps = Object.entries(activity.focus).sort((a, b) => {
                         if (a[0] === 'idle') return 1;
                         if (b[0] === 'idle') return -1;
-                        return b[1] - a[1]; // Sort by minutes descending
+                        return b[1] - a[1];
                     });
-                    
+
                     for (const [app, minutes] of apps) {
                         if (app === 'idle') {
                             focusHtml += `<span class="idle-info">${app}: ${minutes}m</span><br>`;
@@ -456,7 +507,7 @@
                             focusHtml += `${app}: ${minutes}m<br>`;
                         }
                     }
-                    
+
                     tooltip.innerHTML = focusHtml;
                 });
                 bar.addEventListener('mouseleave', () => {
@@ -478,8 +529,7 @@
                 endLabel.textContent = formatMinutes(day.activities[day.activities.length - 1].end);
 
                 timelineContainer.appendChild(startLabel);
-                if ((day.activities[day.activities.length - 1].end - day.activities[0].start) >= 60)
-                {
+                if ((day.activities[day.activities.length - 1].end - day.activities[0].start) >= 60) {
                     timelineContainer.appendChild(endLabel);
                 }
             }
@@ -517,7 +567,7 @@
         if (!currentWeekMonday) return;
         const nextMonday = new Date(currentWeekMonday);
         nextMonday.setDate(nextMonday.getDate() + 7);
-        
+
         // Don't go beyond current week
         const todayMonday = getMondayOfWeek(new Date());
         if (nextMonday <= todayMonday) {
