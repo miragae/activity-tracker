@@ -131,26 +131,26 @@ function Write-ActivityLog {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $date = Get-Date -Format "yyyy-MM-dd"
     $monthFolder = Get-Date -Format "yyyy-MM"
-    
+
     $monthPath = Join-Path $LOGS_PATH $monthFolder
     if (-not (Test-Path $monthPath)) {
         New-Item -Path $monthPath -ItemType Directory -Force | Out-Null
     }
-    
+
     $csvPath = Join-Path $monthPath "$date.csv"
-    
+
     # Create CSV with headers if it doesn't exist
     if (-not (Test-Path $csvPath)) {
         "timestamp,status,window_title,process_name,process_description" | Set-Content -Path $csvPath -Encoding UTF8
     }
-    
+
     # Escape CSV values
     $windowTitle = if ($Window) { $Window.Title -replace '"', '""' } else { "" }
     $processName = if ($Window) { $Window.ProcessName } else { "" }
     $processDescription = if ($Window) { $Window.ProcessDescription -replace '"', '""' } else { "" }
-    
+
     $line = "$timestamp,$Status,`"$windowTitle`",$processName,`"$processDescription`""
-    
+
     # Atomic append
     Add-Content -Path $csvPath -Value $line -Encoding UTF8
 }
@@ -158,7 +158,7 @@ function Write-ActivityLog {
 # Detect if new day started
 function Test-NewDay {
     param([DateTime]$LastCheck)
-    
+
     $now = Get-Date
     return $now.Date -gt $LastCheck.Date
 }
@@ -166,12 +166,12 @@ function Test-NewDay {
 # Start dashboard server in background
 function Start-DashboardServer {
     $serverScript = Join-Path $BASE_PATH "dashboardServer.ps1"
-    
+
     if (-not (Test-Path $serverScript)) {
         Write-Host "Warning: dashboardServer.ps1 not found. Skipping server start." -ForegroundColor Yellow
         return $null
     }
-    
+
     try {
         # Start server in a new PowerShell process
         $serverProcess = Start-Process -FilePath "powershell.exe" `
@@ -200,27 +200,27 @@ function Start-ActivityMonitor {
     Write-Host "Idle Threshold: $IDLE_THRESHOLD seconds"
     Write-Host "Logs Path: $LOGS_PATH"
     Write-Host ""
-    
+
     Initialize-Directories
-    
+
     # Generate initial current_day.js if it doesn't exist
     $currentDayJs = Join-Path $LOGS_PATH "current_day.js"
     if (-not (Test-Path $currentDayJs)) {
-        & "$BASE_PATH\updateCurrent.ps1"
+        & "$BASE_PATH\update.ps1" -Current
     }
-    
+
     # Start dashboard server unless disabled
     $serverProcess = $null
     if (-not $NoServer) {
         $serverProcess = Start-DashboardServer
     }
-    
+
     $lastCheckDate = Get-Date
     $sampleCount = 0
-    
+
     Write-Host "Monitoring started. Press Ctrl+C to stop." -ForegroundColor Cyan
     Write-Host ""
-    
+
     try {
         while ($true) {
             try {
@@ -249,16 +249,16 @@ function Start-ActivityMonitor {
                 Write-Host "[$timestamp] Sample #$sampleCount - Status: $status - Window: $($window.ProcessDescription)" -ForegroundColor $(if ($isIdle) { "Yellow" } else { "Green" })
                 
                 # Update current day data
-                & "$BASE_PATH\updateCurrent.ps1"
-                
+                & "$BASE_PATH\update.ps1" -Current
+
                 # Check if new day started
                 if (Test-NewDay -LastCheck $lastCheckDate) {
                     Write-Host ""
                     Write-Host "New day detected. Processing previous day..." -ForegroundColor Cyan
                     
                     $yesterday = $lastCheckDate.Date
-                    & "$BASE_PATH\updateWeekly.ps1" -Date $yesterday
-                    
+                    & "$BASE_PATH\update.ps1" -Week -Date $yesterday
+
                     $lastCheckDate = Get-Date
                     Write-Host "Day transition complete." -ForegroundColor Green
                     Write-Host ""
