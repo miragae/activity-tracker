@@ -356,6 +356,7 @@
             let firstStart = null;
             let lastEnd = null;
             let totalActiveMinutes = 0;  // Sum of all activity bar durations (including idle)
+            let totalIdleMinutes = 0;
 
             const activities = [];
 
@@ -374,6 +375,9 @@
                 // Sum ALL focus minutes (including idle) for "Active" calculation
                 for (const [app, minutes] of Object.entries(period.focus)) {
                     totalActiveMinutes += minutes;
+                    if (app === 'idle') {
+                        totalIdleMinutes += minutes;
+                    }
                 }
 
                 activities.push({
@@ -390,11 +394,13 @@
 
             const activeMinutes = totalActiveMinutes;  // Sum of all bars
             const awayMinutes = atWorkMinutes - activeMinutes;  // Gaps between bars
+            const idleMinutes = totalIdleMinutes;
 
             result.push({
                 date: date,
                 atWork: atWorkMinutes,
                 active: activeMinutes,
+                idle: idleMinutes,
                 away: awayMinutes,
                 activities: activities
             });
@@ -441,7 +447,7 @@
             // Build statistics display
             let statsHtml = '<div class="stats">';
             statsHtml += `<span class="at-work-time">At work: ${formatTotalTime(day.atWork)}</span><br>`;
-            statsHtml += `<span class="active-time">Active: ${formatTotalTime(day.active)}</span>`;
+            statsHtml += `<span class="active-time" title="Idle: ${formatTotalTime(day.idle)}">Active: ${formatTotalTime(day.active)}</span>`;
 
             if (day.away > 0) {
                 statsHtml += `<br><span class="away-time">Away: ${formatTotalTime(day.away)}</span>`;

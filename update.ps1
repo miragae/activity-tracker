@@ -71,11 +71,7 @@ function Get-MondayOfWeek {
 
 # Process CSV and aggregate activity periods
 function Get-ActivityPeriods {
-    param(
-        [string]$CsvPath,
-        [int]$IdleClosingThreshold,
-        [int]$IdleGapThreshold
-    )
+    param([string]$CsvPath)
 
     if (-not (Test-Path $CsvPath)) {
         return @{}
@@ -90,7 +86,7 @@ function Get-ActivityPeriods {
     $periods = @()
     $currentPeriod = $null
     $lastActiveTime = $null
-    $idleStartTime = $null
+    $closingTime = $null
 
     foreach ($record in $records) {
         $timestamp = [DateTime]::Parse($record.timestamp)
@@ -98,43 +94,31 @@ function Get-ActivityPeriods {
         $processDesc = $record.process_description
 
         if (-not $isActive) {
-            if ($lastActiveTime) {
-                if ($null -eq $idleStartTime) {
-                    $idleStartTime = $timestamp
-                }
-
+            if ($lastActiveTime -and $currentPeriod) {
                 $totalIdleSeconds = ($timestamp - $lastActiveTime).TotalSeconds
 
-                if ($totalIdleSeconds -gt $IdleGapThreshold) {
-                    # Long gap detected - close period at IdleClosingThreshold
-                    if ($currentPeriod) {
-                        $closingTime = $lastActiveTime.AddSeconds($IdleClosingThreshold)
-                        $currentPeriod.EndTime = $closingTime
-
-                        # Add idle time up to closing threshold
-                        $idleMinutesToAdd = [math]::Floor($IdleClosingThreshold / 60)
-                        if ($idleMinutesToAdd -gt 0) {
-                            if ($currentPeriod.Focus.ContainsKey("idle")) {
-                                $currentPeriod.Focus["idle"] += $idleMinutesToAdd
-                            } else {
-                                $currentPeriod.Focus["idle"] = $idleMinutesToAdd
-                            }
-                        }
-
-                        $periods += $currentPeriod
-                        $currentPeriod = $null
-                        $idleStartTime = $null
+                if ($totalIdleSeconds -gt $IdleClosingThreshold) {
+                    # Short gap detected - saving closing time
+                    if ($null -eq $closingTime) {
+                        $closingTime = $timestamp
                     }
+                }
+
+                if ($totalIdleSeconds -gt $IdleGapThreshold) { #8:10
+                    # Long gap detected - close period at IdleClosingThreshold
+                    $currentPeriod.EndTime = $closingTime
+
+                    $idleMinutesToRollback = [math]::Floor(($IdleGapThreshold - $IdleClosingThreshold) / 60)
+                    $currentPeriod.Focus["idle"] -= $idleMinutesToRollback
+                    $periods += $currentPeriod
+                    $currentPeriod = $null
                 } else {
                     # Idle within gap threshold - include in current period
-                    if ($currentPeriod) {
-                        $currentPeriod.EndTime = $timestamp
 
-                        if ($currentPeriod.Focus.ContainsKey("idle")) {
-                            $currentPeriod.Focus["idle"] += 1
-                        } else {
-                            $currentPeriod.Focus["idle"] = 1
-                        }
+                    if ($currentPeriod.Focus.ContainsKey("idle")) {
+                        $currentPeriod.Focus["idle"] += 1
+                    } else {
+                        $currentPeriod.Focus["idle"] = 1
                     }
                 }
             }
@@ -143,7 +127,7 @@ function Get-ActivityPeriods {
 
         # Active record
         $lastActiveTime = $timestamp
-        $idleStartTime = $null
+        $closingTime = $null
 
         if ($null -eq $currentPeriod) {
             $currentPeriod = @{
